@@ -65,14 +65,14 @@ this.aggregatorUrl = aggregatorUrl || process.env.WALRUS_AGGREGATOR_URL || "http
 
   async uploadJSON(obj: any, opts?: { epochs?: number }) {
     const str = JSON.stringify(obj);
-    const data = Buffer.from(str, "utf8");
+   const data = new TextEncoder().encode(str);
     const result = await this.uploadBlob(data, opts || { epochs: 5 });
     return result.blobId;
   }
 
   async downloadJSON(blobId: string) {
     const data = await this.downloadBlob(blobId);
-    const str = Buffer.from(data).toString("utf8");
+    const str = new TextDecoder().decode(data);
     return JSON.parse(str);
   }
 
