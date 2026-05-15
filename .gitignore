@@ -5,3 +5,5 @@ dist
 .env
 .next
 .pnpm-debug.log
+
+walrus-config/publisher-wallets/
