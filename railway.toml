@@ -1,8 +1,6 @@
 [build]
-dockerfile = "Dockerfile.daemon"
+dockerfilePath = "Dockerfile.daemon"
+builder = "DOCKERFILE"
 
 [deploy]
 startCommand = "walrus --context mainnet daemon --bind-address 0.0.0.0:31416 --sub-wallets-dir /root/.config/walrus/publisher-wallets --n-clients 1"
-
-[[services]]
-name = "walrus-daemon"
