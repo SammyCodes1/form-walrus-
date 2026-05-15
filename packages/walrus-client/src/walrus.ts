@@ -1,72 +1,90 @@
+import { SuiClient, getFullnodeUrl } from "@mysten/sui/client";
+import { Ed25519Keypair } from "@mysten/sui/keypairs/ed25519";
+import { WalrusClient as MystenWalrusClient } from "@mysten/walrus";
 import { WalrusFormError } from "./types";
 
 export class WalrusClient {
-  publisherUrl: string;
-  aggregatorUrl: string;
+  private walrus: MystenWalrusClient | null = null;
+  private signer: Ed25519Keypair | null = null;
+  private suiClient: SuiClient;
 
-  constructor(
-    publisherUrl?: string,
-    aggregatorUrl?: string
-  ) {
-this.publisherUrl = publisherUrl || process.env.WALRUS_PUBLISHER_URL || "https://publisher.walrus-mainnet.walrus.space";
-this.aggregatorUrl = aggregatorUrl || process.env.WALRUS_AGGREGATOR_URL || "https://aggregator.walrus-mainnet.walrus.space";
+  constructor() {
+    this.suiClient = new SuiClient({
+      url: process.env.SUI_RPC_URL || getFullnodeUrl("mainnet"),
+    });
   }
 
-  private extractBlobId(response: any) {
-    if (response.newlyCreated) {
-      return {
-        blobId: response.newlyCreated.blobObject.blobId,
-        suiObjectId: response.newlyCreated.blobObject.id || "",
-      };
+  private getWalrus(): MystenWalrusClient {
+    if (this.walrus) return this.walrus;
+    const relay = process.env.WALRUS_UPLOAD_RELAY;
+    this.walrus = new MystenWalrusClient({
+      network: "mainnet",
+      suiClient: this.suiClient as any,
+      ...(relay
+        ? { uploadRelay: { host: relay, sendTip: { max: 1_000 } } }
+        : {}),
+    });
+    return this.walrus;
+  }
+
+  private getSigner(): Ed25519Keypair {
+    if (this.signer) return this.signer;
+    const key = process.env.WALRUS_SIGNER_PRIVKEY;
+    if (!key) {
+      throw new WalrusFormError(
+        "WALRUS_SIGNER_PRIVKEY not set — server keypair required to pay WAL/SUI",
+        "WALRUS_CONFIG_ERROR"
+      );
     }
-    if (response.alreadyCertified) {
-      return {
-        blobId: response.alreadyCertified.blobId,
-        suiObjectId: response.alreadyCertified.event?.blobObjectId || "",
-      };
-    }
-    throw new WalrusFormError("Failed to extract blobId from Walrus response", "WALRUS_UPLOAD_ERROR");
+    this.signer = Ed25519Keypair.fromSecretKey(key);
+    return this.signer;
   }
 
   async uploadBlob(data: Uint8Array | Buffer, opts?: { epochs?: number }) {
-    const epochs = opts?.epochs || 5;
-    const delays = [1000, 2000, 4000];
-    for (let attempt = 0; attempt <= 3; attempt++) {
-      try {
-        const res = await fetch(`${this.publisherUrl}/v1/blobs?epochs=${epochs}`, {
-          method: "PUT",
-          headers: { "Content-Type": "application/octet-stream" },
-          body: data,
-        });
-        if (!res.ok) {
-          const text = await res.text();
-          throw new Error(`Walrus upload failed with status ${res.status}: ${text}`);
-        }
-        const json = await res.json();
-        return this.extractBlobId(json);
-      } catch (err: any) {
-        if (attempt >= 3) {
-          throw new WalrusFormError(`Walrus upload failed after 3 retries: ${err.message}`, "WALRUS_NETWORK_ERROR");
-        }
-        await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+    const blob = data instanceof Uint8Array ? data : new Uint8Array(data);
+    try {
+      const result: any = await this.getWalrus().writeBlob({
+        blob,
+        deletable: false,
+        epochs: opts?.epochs ?? 5,
+        signer: this.getSigner(),
+      });
+      const blobId =
+        result.blobId || result.blobObject?.blobId || result.id;
+      if (!blobId) {
+        throw new Error(
+          `unexpected writeBlob response shape: ${Object.keys(result).join(",")}`
+        );
       }
+      return {
+        blobId,
+        suiObjectId:
+          result.blobObject?.id?.id || result.blobObject?.id || "",
+      };
+    } catch (err: any) {
+      if (err instanceof WalrusFormError) throw err;
+      throw new WalrusFormError(
+        `Walrus write failed: ${err.message}`,
+        "WALRUS_NETWORK_ERROR"
+      );
     }
-    throw new WalrusFormError("Walrus upload failed: Maximum retries exceeded", "WALRUS_NETWORK_ERROR");
   }
 
-  async downloadBlob(blobId: string) {
-    const res = await fetch(`${this.aggregatorUrl}/v1/blobs/${blobId}`);
-    if (!res.ok) {
-      throw new WalrusFormError(`Walrus download failed with status ${res.status}`, "WALRUS_DOWNLOAD_ERROR");
+  async downloadBlob(blobId: string): Promise<Uint8Array> {
+    try {
+      return await this.getWalrus().readBlob({ blobId });
+    } catch (err: any) {
+      throw new WalrusFormError(
+        `Walrus read failed: ${err.message}`,
+        "WALRUS_DOWNLOAD_ERROR"
+      );
     }
-    const buffer = await res.arrayBuffer();
-    return new Uint8Array(buffer);
   }
 
   async uploadJSON(obj: any, opts?: { epochs?: number }) {
     const str = JSON.stringify(obj);
-   const data = new TextEncoder().encode(str);
-    const result = await this.uploadBlob(data, opts || { epochs: 5 });
+    const data = new TextEncoder().encode(str);
+    const result = await this.uploadBlob(data, opts);
     return result.blobId;
   }
 
@@ -76,22 +94,29 @@ this.aggregatorUrl = aggregatorUrl || process.env.WALRUS_AGGREGATOR_URL || "http
     return JSON.parse(str);
   }
 
-  async uploadMedia(file: Uint8Array | Buffer, mimeType: string, onProgress?: (p: number) => void) {
+  async uploadMedia(
+    file: Uint8Array | Buffer,
+    mimeType: string,
+    onProgress?: (p: number) => void
+  ) {
     const CHUNK_SIZE = 10 * 1024 * 1024;
     const chunks: string[] = [];
     const totalSize = file.length;
     let offset = 0;
     while (offset < totalSize) {
       const chunk = file.slice(offset, offset + CHUNK_SIZE);
-      const res = await this.uploadBlob(chunk, { epochs: 5 });
-      chunks.push(res.blobId);
+      const { blobId } = await this.uploadBlob(chunk, { epochs: 5 });
+      chunks.push(blobId);
       offset += chunk.length;
       if (onProgress) {
         onProgress(Math.round((offset / totalSize) * 100));
       }
     }
-    const manifestBlobId = await this.uploadJSON({ chunks, totalSize, mimeType });
+    const manifestBlobId = await this.uploadJSON({
+      chunks,
+      totalSize,
+      mimeType,
+    });
     return { blobId: manifestBlobId, size: totalSize };
   }
 }
-
