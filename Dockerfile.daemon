@@ -1,25 +1,33 @@
 FROM ubuntu:22.04
 
+ENV DEBIAN_FRONTEND=noninteractive
+
 RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 # Download Walrus binary for Linux
-RUN curl -L https://github.com/MystenLabs/walrus/releases/latest/download/walrus-linux-x86_64 \
+RUN curl -L \
+    "https://github.com/MystenLabs/walrus/releases/latest/download/walrus-linux-x86_64" \
     -o /usr/local/bin/walrus && \
     chmod +x /usr/local/bin/walrus
 
 # Create config directories
 RUN mkdir -p /root/.config/walrus/publisher-wallets
 
-# Copy wallet config and client config
-COPY walrus-config/client_config.yaml /root/.config/walrus/client_config.yaml
-COPY walrus-config/publisher-wallets/ /root/.config/walrus/publisher-wallets/
+# Copy wallet config files
+COPY walrus-config/client_config.yaml \
+     /root/.config/walrus/client_config.yaml
+
+COPY walrus-config/publisher-wallets/ \
+     /root/.config/walrus/publisher-wallets/
 
 EXPOSE 31416
 
-CMD ["walrus", "--context", "mainnet", "daemon", \
+CMD ["walrus", \
+     "--context", "mainnet", \
+     "daemon", \
      "--bind-address", "0.0.0.0:31416", \
      "--sub-wallets-dir", "/root/.config/walrus/publisher-wallets", \
      "--n-clients", "1"]
