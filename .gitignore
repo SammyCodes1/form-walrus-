@@ -1,0 +1,7 @@
+apps/api/src/data/creator-index.json
+apps/api/src/data/form-registry.json
+node_modules
+dist
+.env
+.next
+.pnpm-debug.log

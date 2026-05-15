@@ -1,0 +1,9 @@
+[package]
+name = "form_walrus"
+edition = "2024.beta"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/mainnet" }
+
+[addresses]
+form_walrus = "0x0"
